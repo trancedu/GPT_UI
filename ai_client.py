@@ -14,12 +14,12 @@ class AIClient(ABC):
     """Abstract base class for AI clients"""
     
     @abstractmethod
-    def create_stream(self, messages: List[Dict[str, str]], model: str) -> Iterator[str]:
+    def create_stream(self, messages: List[Dict[str, str]], model: str, thinking_enabled: bool = False, thinking_budget: int = 4000) -> Iterator[str]:
         """Create a streaming response"""
         pass
     
     @abstractmethod
-    def create_response(self, messages: List[Dict[str, str]], model: str) -> str:
+    def create_response(self, messages: List[Dict[str, str]], model: str, thinking_enabled: bool = False, thinking_budget: int = 4000) -> str:
         """Create a complete response (non-streaming)"""
         pass
     
@@ -70,8 +70,9 @@ class OpenAIClient(AIClient):
                 # Re-raise if it's not a proxies-related error
                 raise e
     
-    def create_stream(self, messages: List[Dict[str, str]], model: str = "gpt-3.5-turbo") -> Iterator[str]:
+    def create_stream(self, messages: List[Dict[str, str]], model: str = "gpt-3.5-turbo", thinking_enabled: bool = False, thinking_budget: int = 4000) -> Iterator[str]:
         """Create a streaming response from OpenAI"""
+        # Note: OpenAI doesn't support extended thinking, so these parameters are ignored
         try:
             stream = self.client.chat.completions.create(
                 messages=messages,
@@ -87,8 +88,9 @@ class OpenAIClient(AIClient):
         except Exception as e:
             yield f"Error: {e}"
     
-    def create_response(self, messages: List[Dict[str, str]], model: str = "gpt-3.5-turbo") -> str:
+    def create_response(self, messages: List[Dict[str, str]], model: str = "gpt-3.5-turbo", thinking_enabled: bool = False, thinking_budget: int = 4000) -> str:
         """Create a complete response from OpenAI (non-streaming)"""
+        # Note: OpenAI doesn't support extended thinking, so these parameters are ignored
         try:
             response = self.client.chat.completions.create(
                 messages=messages,
@@ -120,36 +122,102 @@ class ClaudeClient(AIClient):
         except ImportError:
             raise ImportError("anthropic package is required for Claude support. Install with: pip install anthropic")
     
-    def create_stream(self, messages: List[Dict[str, str]], model: str = "claude-3-haiku-20240307") -> Iterator[str]:
-        """Create a streaming response from Claude"""
+    def create_stream(self, messages: List[Dict[str, str]], model: str = "claude-3-haiku-20240307", thinking_enabled: bool = False, thinking_budget: int = 4000) -> Iterator[str]:
+        """Create a streaming response from Claude with optional thinking support"""
         try:
             # Convert OpenAI format messages to Claude format
             claude_messages = self._convert_messages_to_claude_format(messages)
             
-            with self.client.messages.stream(
-                model=model,
-                max_tokens=4000,
-                messages=claude_messages
-            ) as stream:
-                for text in stream.text_stream:
-                    yield text
+            # Prepare request parameters
+            stream_params = {
+                "model": model,
+                "max_tokens": 16000,  # Increased for thinking
+                "messages": claude_messages,
+                "stream": True
+            }
+            
+            # Add thinking parameters if enabled
+            if thinking_enabled:
+                stream_params["thinking"] = {
+                    "type": "enabled",
+                    "budget_tokens": thinking_budget
+                }
+            
+            # Stream the response
+            response = self.client.messages.create(**stream_params)
+            
+            thinking_content = ""
+            text_content = ""
+            current_content_type = None
+            
+            for event in response:
+                if event.type == "message_start":
+                    continue
+                elif event.type == "content_block_start":
+                    current_content_type = event.content_block.type
+                    if current_content_type == "thinking":
+                        thinking_content = ""
+                        # Yield thinking header
+                        yield "\n🧠 **Claude is thinking:**\n\n"
+                elif event.type == "content_block_delta":
+                    if hasattr(event.delta, 'thinking') and event.delta.thinking:
+                        # Thinking content
+                        thinking_chunk = event.delta.thinking
+                        thinking_content += thinking_chunk
+                        # Yield thinking in a code block for formatting
+                        if thinking_chunk:
+                            yield thinking_chunk
+                    elif hasattr(event.delta, 'text') and event.delta.text:
+                        # Regular text content
+                        text_chunk = event.delta.text
+                        text_content += text_chunk
+                        # Add separator before text if we had thinking
+                        if thinking_content and not text_content.startswith('\n'):
+                            yield "\n\n💬 **Claude's response:**\n\n"
+                            text_content = '\n\n💬 **Claude\'s response:**\n\n' + text_chunk
+                        yield text_chunk
+                elif event.type == "content_block_stop":
+                    if current_content_type == "thinking":
+                        # End of thinking block
+                        yield "\n\n---\n"
+                elif event.type == "message_stop":
+                    break
                     
         except Exception as e:
             yield f"Error: {e}"
     
-    def create_response(self, messages: List[Dict[str, str]], model: str = "claude-3-haiku-20240307") -> str:
-        """Create a complete response from Claude (non-streaming)"""
+    def create_response(self, messages: List[Dict[str, str]], model: str = "claude-3-haiku-20240307", thinking_enabled: bool = False, thinking_budget: int = 4000) -> str:
+        """Create a complete response from Claude (non-streaming) with optional thinking support"""
         try:
             # Convert OpenAI format messages to Claude format
             claude_messages = self._convert_messages_to_claude_format(messages)
             
-            response = self.client.messages.create(
-                model=model,
-                max_tokens=4000,
-                messages=claude_messages
-            )
+            # Prepare request parameters
+            params = {
+                "model": model,
+                "max_tokens": 16000,  # Increased for thinking
+                "messages": claude_messages
+            }
             
-            return response.content[0].text
+            # Add thinking parameters if enabled
+            if thinking_enabled:
+                params["thinking"] = {
+                    "type": "enabled",
+                    "budget_tokens": thinking_budget
+                }
+            
+            response = self.client.messages.create(**params)
+            
+            # Combine thinking and text content
+            result = ""
+            
+            for content_block in response.content:
+                if content_block.type == "thinking":
+                    result += f"\n🧠 **Claude is thinking:**\n\n{content_block.thinking}\n\n---\n\n💬 **Claude's response:**\n\n"
+                elif content_block.type == "text":
+                    result += content_block.text
+            
+            return result.strip()
             
         except Exception as e:
             return f"Error: {e}"

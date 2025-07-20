@@ -20,12 +20,12 @@ st.set_page_config(
 
 
 
-def stream_response(messages, model):
+def stream_response(messages, model, thinking_enabled=False, thinking_budget=4000):
     """Stream response from AI provider using polymorphic client"""
     client = get_ai_client(model)
     
     try:
-        for chunk in client.create_stream(messages, model):
+        for chunk in client.create_stream(messages, model, thinking_enabled=thinking_enabled, thinking_budget=thinking_budget):
             yield chunk
     except Exception as e:
         yield f"Error: {str(e)}"
@@ -39,6 +39,10 @@ def main():
         st.session_state.messages = []
     if "current_chat_name" not in st.session_state:
         st.session_state.current_chat_name = None
+    if "thinking_enabled" not in st.session_state:
+        st.session_state.thinking_enabled = False
+    if "thinking_budget" not in st.session_state:
+        st.session_state.thinking_budget = 4000
     
     # Sidebar for settings and chat management
     with st.sidebar:
@@ -116,6 +120,36 @@ def main():
                 ["gpt-4o", "gpt-4", "gpt-3.5-turbo"],
                 index=0
             )
+        
+        # Extended Thinking Controls (only for Claude 4 models)
+        claude_thinking_models = ["claude-sonnet-4-20250514", "claude-opus-4-20250514"]
+        if model in claude_thinking_models:
+            st.divider()
+            st.subheader("🧠 Extended Thinking")
+            
+            thinking_enabled = st.checkbox(
+                "Enable Extended Thinking",
+                value=st.session_state.thinking_enabled,
+                help="Allow Claude to show its step-by-step reasoning process for complex problems"
+            )
+            
+            if thinking_enabled != st.session_state.thinking_enabled:
+                st.session_state.thinking_enabled = thinking_enabled
+            
+            if thinking_enabled:
+                thinking_budget = st.slider(
+                    "Thinking Budget (tokens)",
+                    min_value=1024,
+                    max_value=32000,
+                    value=st.session_state.thinking_budget,
+                    step=1024,
+                    help="How many tokens Claude can use for thinking. Higher values allow deeper reasoning but cost more."
+                )
+                
+                if thinking_budget != st.session_state.thinking_budget:
+                    st.session_state.thinking_budget = thinking_budget
+                
+                st.caption(f"💰 Current budget: {thinking_budget:,} tokens")
         
         st.divider()
         
@@ -204,7 +238,12 @@ def main():
             chunk_counter = 0
             
             # Stream the response with smart buffering
-            for chunk in stream_response(st.session_state.messages, model):
+            for chunk in stream_response(
+                st.session_state.messages, 
+                model,
+                thinking_enabled=st.session_state.thinking_enabled,
+                thinking_budget=st.session_state.thinking_budget
+            ):
                 full_response += chunk
                 update_buffer += chunk
                 chunk_counter += 1
