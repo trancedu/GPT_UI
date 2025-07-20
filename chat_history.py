@@ -31,8 +31,21 @@ def auto_save_chat(messages: List[Dict[str, str]], current_filename: Optional[st
     chat_title = None
     for msg in messages:
         if msg["role"] == "user":
-            # Use first 30 characters of first user message as title
-            chat_title = msg["content"][:30].strip()
+            # Extract text content from message (handle both string and list formats)
+            content = msg["content"]
+            if isinstance(content, list):
+                # Find the first text block in content list
+                for block in content:
+                    if isinstance(block, dict) and block.get("type") == "text":
+                        content = block.get("text", "")
+                        break
+                else:
+                    content = "Chat with files"  # Fallback if no text block found
+            elif not isinstance(content, str):
+                content = str(content)
+            
+            # Use first 30 characters as title
+            chat_title = content[:30].strip()
             # Replace invalid filename characters
             chat_title = "".join(c for c in chat_title if c.isalnum() or c in (' ', '-', '_')).strip()
             break

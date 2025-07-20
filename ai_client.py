@@ -27,6 +27,22 @@ class AIClient(ABC):
     def get_available_models(self) -> List[str]:
         """Get list of available models for this provider"""
         pass
+    
+    def upload_file(self, file_path: str) -> Dict[str, Any]:
+        """Upload a file (not supported by default)"""
+        raise NotImplementedError("File uploads not supported by this provider")
+    
+    def list_files(self) -> List[Dict[str, Any]]:
+        """List uploaded files (not supported by default)"""
+        raise NotImplementedError("File listing not supported by this provider")
+    
+    def delete_file(self, file_id: str) -> bool:
+        """Delete a file (not supported by default)"""
+        raise NotImplementedError("File deletion not supported by this provider")
+    
+    def get_file_info(self, file_id: str) -> Dict[str, Any]:
+        """Get file info (not supported by default)"""
+        raise NotImplementedError("File info not supported by this provider")
 
 class OpenAIClient(AIClient):
     """OpenAI client implementation"""
@@ -128,6 +144,9 @@ class ClaudeClient(AIClient):
             # Convert OpenAI format messages to Claude format
             claude_messages = self._convert_messages_to_claude_format(messages)
             
+            # Check if messages contain file references
+            has_files = self._has_file_references(claude_messages)
+            
             # Prepare request parameters
             stream_params = {
                 "model": model,
@@ -143,8 +162,16 @@ class ClaudeClient(AIClient):
                     "budget_tokens": thinking_budget
                 }
             
+            # Add beta headers if files are present
+            extra_headers = {}
+            if has_files:
+                extra_headers["anthropic-beta"] = "files-api-2025-04-14"
+            
             # Stream the response
-            response = self.client.messages.create(**stream_params)
+            if extra_headers:
+                response = self.client.messages.create(extra_headers=extra_headers, **stream_params)
+            else:
+                response = self.client.messages.create(**stream_params)
             
             thinking_content = ""
             text_content = ""
@@ -192,6 +219,9 @@ class ClaudeClient(AIClient):
             # Convert OpenAI format messages to Claude format
             claude_messages = self._convert_messages_to_claude_format(messages)
             
+            # Check if messages contain file references
+            has_files = self._has_file_references(claude_messages)
+            
             # Prepare request parameters
             params = {
                 "model": model,
@@ -206,7 +236,15 @@ class ClaudeClient(AIClient):
                     "budget_tokens": thinking_budget
                 }
             
-            response = self.client.messages.create(**params)
+            # Add beta headers if files are present
+            extra_headers = {}
+            if has_files:
+                extra_headers["anthropic-beta"] = "files-api-2025-04-14"
+            
+            if extra_headers:
+                response = self.client.messages.create(extra_headers=extra_headers, **params)
+            else:
+                response = self.client.messages.create(**params)
             
             # Combine thinking and text content
             result = ""
@@ -238,21 +276,142 @@ class ClaudeClient(AIClient):
                 # We'll prepend system content to the first user message
                 continue
             
-            claude_messages.append({
-                "role": role,
-                "content": msg["content"]
-            })
+            content = msg["content"]
+            
+            # Handle different content types
+            if isinstance(content, str):
+                # Simple text content
+                claude_messages.append({
+                    "role": role,
+                    "content": content
+                })
+            elif isinstance(content, list):
+                # Multiple content blocks - preserve structure for Claude
+                formatted_content = []
+                for block in content:
+                    if isinstance(block, str):
+                        formatted_content.append({
+                            "type": "text",
+                            "text": block
+                        })
+                    elif isinstance(block, dict):
+                        # Pass through content blocks (images, documents, files)
+                        formatted_content.append(block)
+                
+                claude_messages.append({
+                    "role": role,
+                    "content": formatted_content
+                })
+            else:
+                # Fallback to simple text
+                claude_messages.append({
+                    "role": role,
+                    "content": str(content)
+                })
         
         # Handle system messages by prepending to first user message
         system_content = ""
         for msg in messages:
             if msg["role"] == "system":
-                system_content += msg["content"] + "\n\n"
+                if isinstance(msg["content"], str):
+                    system_content += msg["content"] + "\n\n"
+                elif isinstance(msg["content"], list):
+                    for block in msg["content"]:
+                        if isinstance(block, dict) and block.get("type") == "text":
+                            system_content += block.get("text", "") + "\n\n"
         
         if system_content and claude_messages and claude_messages[0]["role"] == "user":
-            claude_messages[0]["content"] = system_content + claude_messages[0]["content"]
+            first_content = claude_messages[0]["content"]
+            if isinstance(first_content, str):
+                claude_messages[0]["content"] = system_content + first_content
+            elif isinstance(first_content, list):
+                # Insert system content as first text block
+                claude_messages[0]["content"] = [
+                    {"type": "text", "text": system_content}
+                ] + first_content
         
         return claude_messages
+
+    def _has_file_references(self, messages: List[Dict[str, Any]]) -> bool:
+        """Check if messages contain file references"""
+        for message in messages:
+            content = message.get("content", "")
+            if isinstance(content, list):
+                for block in content:
+                    if isinstance(block, dict) and block.get("type") in ["document", "image", "container_upload"]:
+                        if block.get("source", {}).get("type") == "file":
+                            return True
+        return False
+
+    def upload_file(self, file_path: str) -> Dict[str, Any]:
+        """Upload a file to Claude's Files API"""
+        try:
+            import os
+            filename = os.path.basename(file_path)
+            
+            # For code files, override MIME type to text/plain so they work as document blocks
+            code_extensions = ('.py', '.pyw', '.js', '.jsx', '.ts', '.tsx', '.html', '.htm', '.css', '.scss', '.sass', '.md', '.json', '.xml', '.yaml', '.yml', '.sql', '.sh', '.bat', '.ps1', '.php', '.rb', '.go', '.rs', '.cpp', '.c', '.h', '.hpp', '.java', '.kt', '.swift', '.r', '.m', '.pl', '.lua', '.vim')
+            
+            with open(file_path, 'rb') as f:
+                if any(filename.lower().endswith(ext) for ext in code_extensions):
+                    # Force code files to be uploaded as text/plain
+                    response = self.client.beta.files.upload(
+                        file=(filename, f, "text/plain")
+                    )
+                else:
+                    # Use default MIME type detection
+                    response = self.client.beta.files.upload(
+                        file=f
+                    )
+            
+            return {
+                "id": response.id,
+                "filename": response.filename,
+                "size_bytes": response.size_bytes,
+                "mime_type": response.mime_type,
+                "created_at": response.created_at
+            }
+        except Exception as e:
+            raise Exception(f"Failed to upload file: {e}")
+    
+    def list_files(self) -> List[Dict[str, Any]]:
+        """List all uploaded files"""
+        try:
+            response = self.client.beta.files.list()
+            return [
+                {
+                    "id": file.id,
+                    "filename": file.filename,
+                    "size_bytes": file.size_bytes,
+                    "mime_type": file.mime_type,
+                    "created_at": file.created_at
+                }
+                for file in response.data
+            ]
+        except Exception as e:
+            raise Exception(f"Failed to list files: {e}")
+    
+    def delete_file(self, file_id: str) -> bool:
+        """Delete a file by ID"""
+        try:
+            self.client.beta.files.delete(file_id=file_id)
+            return True
+        except Exception as e:
+            raise Exception(f"Failed to delete file: {e}")
+    
+    def get_file_info(self, file_id: str) -> Dict[str, Any]:
+        """Get file metadata by ID"""
+        try:
+            response = self.client.beta.files.retrieve_metadata(file_id=file_id)
+            return {
+                "id": response.id,
+                "filename": response.filename,
+                "size_bytes": response.size_bytes,
+                "mime_type": response.mime_type,
+                "created_at": response.created_at
+            }
+        except Exception as e:
+            raise Exception(f"Failed to get file info: {e}")
 
 # Provider registry
 PROVIDERS = {

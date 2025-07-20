@@ -1,6 +1,6 @@
 import streamlit as st
 import os
-from typing import Generator
+from typing import Generator, Dict, Any
 
 from ai_client import get_ai_client, get_available_models
 from chat_history import (
@@ -10,6 +10,47 @@ from chat_history import (
     delete_chat_history, 
     get_chat_info
 )
+
+def create_file_reference(file_info: Dict[str, Any]) -> Dict[str, Any]:
+    """Create a file reference content block based on file type"""
+    mime_type = file_info["mime_type"]
+    filename = file_info["filename"].lower()
+    
+    # Code and text file extensions (now uploaded as text/plain)
+    code_extensions = ('.py', '.pyw', '.js', '.jsx', '.ts', '.tsx', '.html', '.htm', '.css', '.scss', '.sass', '.md', '.txt', '.json', '.xml', '.yaml', '.yml', '.sql', '.sh', '.bat', '.ps1', '.php', '.rb', '.go', '.rs', '.cpp', '.c', '.h', '.hpp', '.java', '.kt', '.swift', '.r', '.m', '.pl', '.lua', '.vim', '.dockerfile')
+    
+    if (mime_type == "application/pdf" or 
+        mime_type == "text/plain" or 
+        filename.endswith(code_extensions)):
+        # Document block for PDFs, text files, and code files (uploaded as text/plain)
+        return {
+            "type": "document",
+            "source": {
+                "type": "file",
+                "file_id": file_info["id"]
+            },
+            "filename": file_info["filename"]  # Keep for UI display
+        }
+    elif mime_type.startswith("image/"):
+        # Image block for images
+        return {
+            "type": "image",
+            "source": {
+                "type": "file", 
+                "file_id": file_info["id"]
+            },
+            "filename": file_info["filename"]  # Keep for UI display
+        }
+    else:
+        # Container upload for other file types (CSV, JSON, etc.)
+        return {
+            "type": "container_upload",
+            "source": {
+                "type": "file",
+                "file_id": file_info["id"]
+            },
+            "filename": file_info["filename"]  # Keep for UI display
+        }
 
 # Configure Streamlit page
 st.set_page_config(
@@ -43,7 +84,9 @@ def main():
         st.session_state.thinking_enabled = False
     if "thinking_budget" not in st.session_state:
         st.session_state.thinking_budget = 4000
-    
+    if "uploaded_files" not in st.session_state:
+        st.session_state.uploaded_files = []
+
     # Sidebar for settings and chat management
     with st.sidebar:
         st.header("Settings")
@@ -153,6 +196,119 @@ def main():
         
         st.divider()
         
+        # File Upload and Management (only for Claude models)
+        if model.startswith("claude-"):
+            st.subheader("📁 File Management")
+            
+            # File upload
+            uploaded_file = st.file_uploader(
+                "Upload File",
+                type=['pdf', 'txt', 'py', 'pyw', 'js', 'jsx', 'ts', 'tsx', 'html', 'htm', 'css', 'scss', 'sass', 'json', 'xml', 'yaml', 'yml', 'md', 'sql', 'sh', 'bat', 'php', 'rb', 'go', 'rs', 'cpp', 'c', 'h', 'hpp', 'java', 'kt', 'swift', 'r', 'm', 'pl', 'lua', 'vim', 'dockerfile', 'png', 'jpg', 'jpeg', 'gif', 'webp', 'csv', 'docx', 'xlsx'],
+                help="Upload files to use with Claude. Supports PDFs, images, code files (Python, JavaScript, TypeScript, HTML, CSS, etc.), text files, and data files."
+            )
+            
+            if uploaded_file is not None:
+                try:
+                    # Save uploaded file temporarily
+                    import tempfile
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=f"_{uploaded_file.name}") as tmp_file:
+                        tmp_file.write(uploaded_file.getvalue())
+                        temp_path = tmp_file.name
+                    
+                    # Upload to Claude Files API
+                    client = get_ai_client(model)
+                    if hasattr(client, 'upload_file'):
+                        file_info = client.upload_file(temp_path)
+                        
+                        # Add to session state if not already there
+                        if not any(f["id"] == file_info["id"] for f in st.session_state.uploaded_files):
+                            st.session_state.uploaded_files.append(file_info)
+                            st.success(f"✅ Uploaded: {file_info['filename']}")
+                        
+                        # Clean up temp file
+                        import os
+                        os.unlink(temp_path)
+                    else:
+                        st.error("File uploads not supported for this model")
+                        
+                except Exception as e:
+                    st.error(f"❌ Upload failed: {str(e)}")
+            
+            # Display uploaded files
+            if st.session_state.uploaded_files:
+                col1, col2 = st.columns([3, 1])
+                with col1:
+                    st.subheader("📄 Uploaded Files")
+                with col2:
+                    if st.button("🗑️ Clear All", help="Delete all uploaded files", type="secondary"):
+                        try:
+                            client = get_ai_client(model)
+                            if hasattr(client, 'delete_file'):
+                                deleted_count = 0
+                                for file_info in st.session_state.uploaded_files:
+                                    try:
+                                        client.delete_file(file_info["id"])
+                                        deleted_count += 1
+                                    except:
+                                        pass  # Continue deleting others
+                                st.session_state.uploaded_files = []
+                                st.session_state.pending_files = []
+                                st.success(f"🗑️ Deleted {deleted_count} files")
+                                st.rerun()
+                        except Exception as e:
+                            st.error(f"Failed to clear files: {str(e)}")
+                
+                files_to_remove = []
+                for i, file_info in enumerate(st.session_state.uploaded_files):
+                    col1, col2, col3 = st.columns([3, 1, 1])
+                    
+                    with col1:
+                        # File info with size
+                        size_mb = file_info["size_bytes"] / (1024 * 1024)
+                        st.text(f"{file_info['filename']} ({size_mb:.1f}MB)")
+                        st.caption(f"📎 {file_info['mime_type']}")
+                    
+                    with col2:
+                        # Add to message button
+                        if st.button("➕", key=f"add_{i}", help="Add to next message"):
+                            # Create file reference based on MIME type
+                            file_ref = create_file_reference(file_info)
+                            if "pending_files" not in st.session_state:
+                                st.session_state.pending_files = []
+                            st.session_state.pending_files.append(file_ref)
+                            st.success(f"📎 Added {file_info['filename']} to next message")
+                    
+                    with col3:
+                        # Delete button
+                        if st.button("🗑️", key=f"delete_{i}", help="Delete file"):
+                            try:
+                                client = get_ai_client(model)
+                                if hasattr(client, 'delete_file'):
+                                    client.delete_file(file_info["id"])
+                                files_to_remove.append(i)
+                                st.success(f"🗑️ Deleted {file_info['filename']}")
+                            except Exception as e:
+                                st.error(f"Failed to delete: {str(e)}")
+                
+                # Remove deleted files from session state
+                for i in reversed(files_to_remove):
+                    st.session_state.uploaded_files.pop(i)
+                
+                if files_to_remove:
+                    st.rerun()
+                
+                # Show help message
+                st.info("💡 **Tip:** Click the ➕ button next to a file to attach it to your next message!")
+            
+            # Show pending file attachments
+            if "pending_files" in st.session_state and st.session_state.pending_files:
+                st.subheader("📎 Files for Next Message")
+                for file_ref in st.session_state.pending_files:
+                    if "filename" in file_ref:
+                        st.info(f"📎 {file_ref['filename']}")
+
+        st.divider()
+        
         # Chat History Management
         st.header("💬 Chat History")
         
@@ -219,16 +375,76 @@ def main():
     # Display chat messages
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
-            st.markdown(message["content"])
+            content = message["content"]
+            if isinstance(content, str):
+                st.markdown(content)
+            elif isinstance(content, list):
+                # Handle content blocks (text + files)
+                for block in content:
+                    if isinstance(block, dict):
+                        if block.get("type") == "text":
+                            st.markdown(block.get("text", ""))
+                        elif block.get("type") in ["document", "image", "container_upload"]:
+                            # Show file attachment info
+                            file_id = block.get("source", {}).get("file_id", "Unknown")
+                            filename = block.get("filename", f"File {file_id}")
+                            st.info(f"📎 {filename}")
+                    else:
+                        st.markdown(str(block))
+            else:
+                st.markdown(str(content))
+    
+    # Show attachment status
+    if st.session_state.uploaded_files and ("pending_files" not in st.session_state or not st.session_state.pending_files):
+        st.warning("⚠️ You have uploaded files but none are attached to your next message. Click ➕ next to files in the sidebar to attach them!")
     
     # Chat input
     if prompt := st.chat_input("Type your message..."):
+        # Prepare user message with files if any
+        user_content = []
+        
+        # Add text content
+        user_content.append({
+            "type": "text",
+            "text": prompt
+        })
+        
+        # Add pending files if any
+        if "pending_files" in st.session_state and st.session_state.pending_files:
+            st.info(f"📎 Attaching {len(st.session_state.pending_files)} file(s) to this message...")
+            for file_ref in st.session_state.pending_files:
+                # Remove filename key as it's not part of the API format
+                api_file_ref = {k: v for k, v in file_ref.items() if k != "filename"}
+                user_content.append(api_file_ref)
+            
+            # Clear pending files after adding them
+            st.session_state.pending_files = []
+        
+        # Use simple text format if no files, otherwise use content blocks
+        message_content = prompt if len(user_content) == 1 else user_content
+        
+        # Debug: Show message structure
+        if len(user_content) > 1:
+            st.info(f"🔍 Debug: Sending message with {len(user_content)} content blocks ({len(user_content)-1} files + 1 text)")
+        
         # Add user message
-        st.session_state.messages.append({"role": "user", "content": prompt})
+        st.session_state.messages.append({"role": "user", "content": message_content})
         
         # Display user message
         with st.chat_message("user"):
             st.markdown(prompt)
+            # Show attached files
+            if isinstance(message_content, list) and len(message_content) > 1:
+                for content_block in message_content[1:]:  # Skip first text block
+                    if content_block.get("type") in ["document", "image", "container_upload"]:
+                        file_id = content_block.get("source", {}).get("file_id", "")
+                        # Find filename from uploaded files
+                        filename = "Unknown file"
+                        for f in st.session_state.uploaded_files:
+                            if f["id"] == file_id:
+                                filename = f["filename"]
+                                break
+                        st.info(f"📎 Attached: {filename}")
         
         # Generate and display assistant response
         with st.chat_message("assistant"):
@@ -265,4 +481,4 @@ def main():
             st.session_state.current_chat_name = filename
 
 if __name__ == "__main__":
-    main() 
+    main()
