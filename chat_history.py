@@ -161,15 +161,27 @@ def get_chat_info(filename: str) -> Tuple[str, str]:
             if not title:
                 title = filename.replace('.json', '')
         
-        # Get preview (first user message)
+        # Get preview (assistant's first response or message count)
         messages = chat_data.get("messages", [])
         preview = "Empty chat"
-        for msg in messages:
-            if msg["role"] == "user":
-                preview = msg["content"][:50]
-                if len(msg["content"]) > 50:
-                    preview += "..."
-                break
+        
+        if messages:
+            # Try to find first assistant response for preview
+            assistant_response = None
+            for msg in messages:
+                if msg["role"] == "assistant":
+                    assistant_response = msg["content"][:60].strip()
+                    if len(msg["content"]) > 60:
+                        assistant_response += "..."
+                    break
+            
+            if assistant_response:
+                preview = assistant_response
+            else:
+                # Fallback to message count if no assistant response found
+                user_count = sum(1 for msg in messages if msg["role"] == "user")
+                assistant_count = sum(1 for msg in messages if msg["role"] == "assistant")
+                preview = f"{user_count + assistant_count} messages"
         
         return title, preview
     except Exception:

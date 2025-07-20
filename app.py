@@ -153,8 +153,8 @@ def main():
                 col1, col2 = st.columns([4, 1])
                 
                 with col1:
-                    # Get chat title and preview
-                    title, preview = get_chat_info(chat_file)
+                    # Get chat title
+                    title, _ = get_chat_info(chat_file)
                     
                     # Highlight current chat
                     button_type = "primary" if chat_file == st.session_state.current_chat_name else "secondary"
@@ -170,9 +170,6 @@ def main():
                             st.session_state.messages = loaded_messages
                             st.session_state.current_chat_name = chat_file
                             st.rerun()
-                    
-                    # Show preview
-                    st.caption(f"💭 {preview}")
                 
                 with col2:
                     # Delete button
