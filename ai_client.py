@@ -1,7 +1,9 @@
 import openai
 import os
+import time
+import random
 from dotenv import load_dotenv
-from typing import Iterator, List, Dict, Any
+from typing import Iterator, List, Dict, Any, Optional
 import httpx
 from abc import ABC, abstractmethod
 
@@ -14,12 +16,12 @@ class AIClient(ABC):
     """Abstract base class for AI clients"""
     
     @abstractmethod
-    def create_stream(self, messages: List[Dict[str, str]], model: str, thinking_enabled: bool = False, thinking_budget: int = 4000) -> Iterator[str]:
+    def create_stream(self, messages: List[Dict[str, str]], model: str, thinking_enabled: bool = False, thinking_budget: int = 4000, tools: Optional[List[Dict[str, Any]]] = None) -> Iterator[str]:
         """Create a streaming response"""
         pass
     
     @abstractmethod
-    def create_response(self, messages: List[Dict[str, str]], model: str, thinking_enabled: bool = False, thinking_budget: int = 4000) -> str:
+    def create_response(self, messages: List[Dict[str, str]], model: str, thinking_enabled: bool = False, thinking_budget: int = 4000, tools: Optional[List[Dict[str, Any]]] = None) -> str:
         """Create a complete response (non-streaming)"""
         pass
     
@@ -86,9 +88,9 @@ class OpenAIClient(AIClient):
                 # Re-raise if it's not a proxies-related error
                 raise e
     
-    def create_stream(self, messages: List[Dict[str, str]], model: str = "gpt-3.5-turbo", thinking_enabled: bool = False, thinking_budget: int = 4000) -> Iterator[str]:
+    def create_stream(self, messages: List[Dict[str, str]], model: str = "gpt-3.5-turbo", thinking_enabled: bool = False, thinking_budget: int = 4000, tools: Optional[List[Dict[str, Any]]] = None) -> Iterator[str]:
         """Create a streaming response from OpenAI"""
-        # Note: OpenAI doesn't support extended thinking, so these parameters are ignored
+        # Note: OpenAI doesn't support extended thinking or web search, so these parameters are ignored
         try:
             stream = self.client.chat.completions.create(
                 messages=messages,
@@ -104,9 +106,9 @@ class OpenAIClient(AIClient):
         except Exception as e:
             yield f"Error: {e}"
     
-    def create_response(self, messages: List[Dict[str, str]], model: str = "gpt-3.5-turbo", thinking_enabled: bool = False, thinking_budget: int = 4000) -> str:
+    def create_response(self, messages: List[Dict[str, str]], model: str = "gpt-3.5-turbo", thinking_enabled: bool = False, thinking_budget: int = 4000, tools: Optional[List[Dict[str, Any]]] = None) -> str:
         """Create a complete response from OpenAI (non-streaming)"""
-        # Note: OpenAI doesn't support extended thinking, so these parameters are ignored
+        # Note: OpenAI doesn't support extended thinking or web search, so these parameters are ignored
         try:
             response = self.client.chat.completions.create(
                 messages=messages,
@@ -138,127 +140,251 @@ class ClaudeClient(AIClient):
         except ImportError:
             raise ImportError("anthropic package is required for Claude support. Install with: pip install anthropic")
     
-    def create_stream(self, messages: List[Dict[str, str]], model: str = "claude-3-haiku-20240307", thinking_enabled: bool = False, thinking_budget: int = 4000) -> Iterator[str]:
-        """Create a streaming response from Claude with optional thinking support"""
-        try:
-            # Convert OpenAI format messages to Claude format
-            claude_messages = self._convert_messages_to_claude_format(messages)
-            
-            # Check if messages contain file references
-            has_files = self._has_file_references(claude_messages)
-            
-            # Prepare request parameters
-            stream_params = {
-                "model": model,
-                "max_tokens": 16000,  # Increased for thinking
-                "messages": claude_messages,
-                "stream": True
-            }
-            
-            # Add thinking parameters if enabled
-            if thinking_enabled:
-                stream_params["thinking"] = {
-                    "type": "enabled",
-                    "budget_tokens": thinking_budget
-                }
-            
-            # Add beta headers if files are present
-            extra_headers = {}
-            if has_files:
-                extra_headers["anthropic-beta"] = "files-api-2025-04-14"
-            
-            # Stream the response
-            if extra_headers:
-                response = self.client.messages.create(extra_headers=extra_headers, **stream_params)
+    def _handle_api_error(self, error: Exception, retry_count: int = 0, max_retries: int = 3) -> str:
+        """Handle API errors with retry logic for overloaded errors"""
+        error_str = str(error)
+        
+        # Check for overloaded error
+        if "overloaded" in error_str.lower() or "overloaded_error" in error_str:
+            if retry_count < max_retries:
+                # Exponential backoff with jitter
+                wait_time = (2 ** retry_count) + random.uniform(0, 1)
+                time.sleep(wait_time)
+                return f"🔄 **API Overloaded** - Retrying in {wait_time:.1f}s... (attempt {retry_count + 1}/{max_retries})"
             else:
-                response = self.client.messages.create(**stream_params)
-            
-            thinking_content = ""
-            text_content = ""
-            current_content_type = None
-            
-            for event in response:
-                if event.type == "message_start":
-                    continue
-                elif event.type == "content_block_start":
-                    current_content_type = event.content_block.type
-                    if current_content_type == "thinking":
-                        thinking_content = ""
-                        # Yield thinking header
-                        yield "\n🧠 **Claude is thinking:**\n\n"
-                elif event.type == "content_block_delta":
-                    if hasattr(event.delta, 'thinking') and event.delta.thinking:
-                        # Thinking content
-                        thinking_chunk = event.delta.thinking
-                        thinking_content += thinking_chunk
-                        # Yield thinking in a code block for formatting
-                        if thinking_chunk:
-                            yield thinking_chunk
-                    elif hasattr(event.delta, 'text') and event.delta.text:
-                        # Regular text content
-                        text_chunk = event.delta.text
-                        text_content += text_chunk
-                        # Add separator before text if we had thinking
-                        if thinking_content and not text_content.startswith('\n'):
-                            yield "\n\n💬 **Claude's response:**\n\n"
-                            text_content = '\n\n💬 **Claude\'s response:**\n\n' + text_chunk
-                        yield text_chunk
-                elif event.type == "content_block_stop":
-                    if current_content_type == "thinking":
-                        # End of thinking block
-                        yield "\n\n---\n"
-                elif event.type == "message_stop":
-                    break
-                    
-        except Exception as e:
-            yield f"Error: {e}"
+                return f"❌ **API Overloaded** - Please try again in a few minutes. The service is currently experiencing high demand."
+        
+        # Check for rate limit errors
+        elif "rate_limit" in error_str.lower() or "429" in error_str:
+            if retry_count < max_retries:
+                wait_time = (2 ** retry_count) + random.uniform(0, 1)
+                time.sleep(wait_time)
+                return f"🔄 **Rate Limited** - Retrying in {wait_time:.1f}s... (attempt {retry_count + 1}/{max_retries})"
+            else:
+                return f"❌ **Rate Limited** - Please wait a moment before trying again."
+        
+        # Check for authentication errors
+        elif "authentication" in error_str.lower() or "401" in error_str or "403" in error_str:
+            return f"❌ **Authentication Error** - Please check your API key in the .env file."
+        
+        # Check for web search specific errors
+        elif "web_search" in error_str.lower():
+            return f"❌ **Web Search Error** - The web search feature is currently unavailable. Please try again later."
+        
+        # Generic error handling
+        else:
+            return f"❌ **Error**: {error_str}"
     
-    def create_response(self, messages: List[Dict[str, str]], model: str = "claude-3-haiku-20240307", thinking_enabled: bool = False, thinking_budget: int = 4000) -> str:
-        """Create a complete response from Claude (non-streaming) with optional thinking support"""
-        try:
-            # Convert OpenAI format messages to Claude format
-            claude_messages = self._convert_messages_to_claude_format(messages)
+    def create_web_search_tool(self, max_uses: Optional[int] = None, 
+                              allowed_domains: Optional[List[str]] = None,
+                              blocked_domains: Optional[List[str]] = None,
+                              user_location: Optional[str] = None) -> Dict[str, Any]:
+        """Create a web search tool configuration for Claude"""
+        tool = {
+            "type": "web_search_20250305",
+            "name": "web_search"
+        }
+        
+        # Add optional parameters if provided
+        if max_uses is not None:
+            tool["max_uses"] = max_uses
+        if allowed_domains:
+            tool["allowed_domains"] = allowed_domains
+        if blocked_domains:
+            tool["blocked_domains"] = blocked_domains
+        if user_location:
+            tool["user_location"] = user_location
             
-            # Check if messages contain file references
-            has_files = self._has_file_references(claude_messages)
-            
-            # Prepare request parameters
-            params = {
-                "model": model,
-                "max_tokens": 16000,  # Increased for thinking
-                "messages": claude_messages
-            }
-            
-            # Add thinking parameters if enabled
-            if thinking_enabled:
-                params["thinking"] = {
-                    "type": "enabled",
-                    "budget_tokens": thinking_budget
+        return tool
+    
+    def create_stream(self, messages: List[Dict[str, str]], model: str = "claude-3-haiku-20240307", thinking_enabled: bool = False, thinking_budget: int = 4000, tools: Optional[List[Dict[str, Any]]] = None) -> Iterator[str]:
+        """Create a streaming response from Claude with optional thinking and tool support"""
+        max_retries = 3
+        retry_count = 0
+        
+        while retry_count <= max_retries:
+            try:
+                # Convert OpenAI format messages to Claude format
+                claude_messages = self._convert_messages_to_claude_format(messages)
+                
+                # Check if messages contain file references
+                has_files = self._has_file_references(claude_messages)
+                
+                # Prepare request parameters
+                stream_params = {
+                    "model": model,
+                    "max_tokens": 16000,  # Increased for thinking
+                    "messages": claude_messages,
+                    "stream": True
                 }
-            
-            # Add beta headers if files are present
-            extra_headers = {}
-            if has_files:
-                extra_headers["anthropic-beta"] = "files-api-2025-04-14"
-            
-            if extra_headers:
-                response = self.client.messages.create(extra_headers=extra_headers, **params)
-            else:
-                response = self.client.messages.create(**params)
-            
-            # Combine thinking and text content
-            result = ""
-            
-            for content_block in response.content:
-                if content_block.type == "thinking":
-                    result += f"\n🧠 **Claude is thinking:**\n\n{content_block.thinking}\n\n---\n\n💬 **Claude's response:**\n\n"
-                elif content_block.type == "text":
-                    result += content_block.text
-            
-            return result.strip()
-            
-        except Exception as e:
-            return f"Error: {e}"
+                
+                # Add thinking parameters if enabled
+                if thinking_enabled:
+                    stream_params["thinking"] = {
+                        "type": "enabled",
+                        "budget_tokens": thinking_budget
+                    }
+                
+                # Add tools if provided
+                if tools:
+                    stream_params["tools"] = tools
+                
+                # Add beta headers as needed
+                extra_headers = {}
+                if has_files:
+                    extra_headers["anthropic-beta"] = "files-api-2025-04-14"
+                    
+                # Check if web search tool is being used
+                has_web_search = tools and any(tool.get("type") == "web_search_20250305" for tool in tools)
+                if has_web_search:
+                    # Add or update beta headers for web search
+                    if "anthropic-beta" in extra_headers:
+                        extra_headers["anthropic-beta"] += ",web-search-2025-03-05"
+                    else:
+                        extra_headers["anthropic-beta"] = "web-search-2025-03-05"
+                
+                # Stream the response
+                if extra_headers:
+                    response = self.client.messages.create(extra_headers=extra_headers, **stream_params)
+                else:
+                    response = self.client.messages.create(**stream_params)
+                
+                thinking_content = ""
+                text_content = ""
+                current_content_type = None
+                
+                for event in response:
+                    if event.type == "message_start":
+                        continue
+                    elif event.type == "content_block_start":
+                        current_content_type = event.content_block.type
+                        if current_content_type == "thinking":
+                            thinking_content = ""
+                            # Yield thinking header
+                            yield "\n🧠 **Claude is thinking:**\n\n"
+                        elif current_content_type == "tool_use":
+                            # Handle tool use (including web search)
+                            tool_name = event.content_block.name
+                            if tool_name == "web_search":
+                                yield f"\n🔍 **Searching the web:**\n\n"
+                    elif event.type == "content_block_delta":
+                        if hasattr(event.delta, 'thinking') and event.delta.thinking:
+                            # Thinking content
+                            thinking_chunk = event.delta.thinking
+                            thinking_content += thinking_chunk
+                            # Yield thinking in a code block for formatting
+                            if thinking_chunk:
+                                yield thinking_chunk
+                        elif hasattr(event.delta, 'text') and event.delta.text:
+                            # Regular text content
+                            text_chunk = event.delta.text
+                            text_content += text_chunk
+                            # Add separator before text if we had thinking
+                            if thinking_content and not text_content.startswith('\n'):
+                                yield "\n\n💬 **Claude's response:**\n\n"
+                                text_content = '\n\n💬 **Claude\'s response:**\n\n' + text_chunk
+                            yield text_chunk
+                    elif event.type == "content_block_stop":
+                        if current_content_type == "thinking":
+                            # End of thinking block
+                            yield "\n\n---\n"
+                        elif current_content_type == "tool_use":
+                            # End of tool use block
+                            yield "\n\n"
+                    elif event.type == "message_stop":
+                        break
+                
+                # If we get here, the request was successful
+                break
+                        
+            except Exception as e:
+                error_message = self._handle_api_error(e, retry_count, max_retries)
+                
+                if retry_count < max_retries and ("🔄" in error_message):
+                    # This is a retryable error
+                    yield error_message
+                    retry_count += 1
+                    continue
+                else:
+                    # This is a non-retryable error or we've exhausted retries
+                    yield error_message
+                    break
+    
+    def create_response(self, messages: List[Dict[str, str]], model: str = "claude-3-haiku-20240307", thinking_enabled: bool = False, thinking_budget: int = 4000, tools: Optional[List[Dict[str, Any]]] = None) -> str:
+        """Create a complete response from Claude (non-streaming) with optional thinking and tool support"""
+        max_retries = 3
+        retry_count = 0
+        
+        while retry_count <= max_retries:
+            try:
+                # Convert OpenAI format messages to Claude format
+                claude_messages = self._convert_messages_to_claude_format(messages)
+                
+                # Check if messages contain file references
+                has_files = self._has_file_references(claude_messages)
+                
+                # Prepare request parameters
+                params = {
+                    "model": model,
+                    "max_tokens": 16000,  # Increased for thinking
+                    "messages": claude_messages
+                }
+                
+                # Add thinking parameters if enabled
+                if thinking_enabled:
+                    params["thinking"] = {
+                        "type": "enabled",
+                        "budget_tokens": thinking_budget
+                    }
+                
+                # Add tools if provided
+                if tools:
+                    params["tools"] = tools
+                
+                # Add beta headers as needed
+                extra_headers = {}
+                if has_files:
+                    extra_headers["anthropic-beta"] = "files-api-2025-04-14"
+                    
+                # Check if web search tool is being used
+                has_web_search = tools and any(tool.get("type") == "web_search_20250305" for tool in tools)
+                if has_web_search:
+                    # Add or update beta headers for web search
+                    if "anthropic-beta" in extra_headers:
+                        extra_headers["anthropic-beta"] += ",web-search-2025-03-05"
+                    else:
+                        extra_headers["anthropic-beta"] = "web-search-2025-03-05"
+                
+                if extra_headers:
+                    response = self.client.messages.create(extra_headers=extra_headers, **params)
+                else:
+                    response = self.client.messages.create(**params)
+                
+                # Combine thinking, tool use, and text content
+                result = ""
+                
+                for content_block in response.content:
+                    if content_block.type == "thinking":
+                        result += f"\n🧠 **Claude is thinking:**\n\n{content_block.thinking}\n\n---\n\n💬 **Claude's response:**\n\n"
+                    elif content_block.type == "text":
+                        result += content_block.text
+                    elif content_block.type == "tool_use":
+                        # Handle tool use results (including web search)
+                        if content_block.name == "web_search":
+                            result += f"\n🔍 **Web search performed:** {content_block.input.get('query', 'N/A')}\n\n"
+                
+                return result.strip()
+                
+            except Exception as e:
+                error_message = self._handle_api_error(e, retry_count, max_retries)
+                
+                if retry_count < max_retries and ("🔄" in error_message):
+                    # This is a retryable error
+                    retry_count += 1
+                    continue
+                else:
+                    # This is a non-retryable error or we've exhausted retries
+                    return error_message
     
     def get_available_models(self) -> List[str]:
         """Get available Claude models"""

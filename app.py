@@ -1,6 +1,6 @@
 import streamlit as st
 import os
-from typing import Generator
+from typing import Generator, List, Dict, Any, Optional
 
 from ai_client import get_ai_client, get_available_models
 from chat_history import (
@@ -21,19 +21,134 @@ st.set_page_config(
 
 
 
-def stream_response(messages, model, thinking_enabled=False, thinking_budget=4000):
+def stream_response(messages, model, thinking_enabled=False, thinking_budget=4000, tools=None):
     """Stream response from AI provider using polymorphic client"""
     client = get_ai_client(model)
     
     try:
-        for chunk in client.create_stream(messages, model, thinking_enabled=thinking_enabled, thinking_budget=thinking_budget):
+        for chunk in client.create_stream(messages, model, thinking_enabled=thinking_enabled, thinking_budget=thinking_budget, tools=tools):
             yield chunk
     except Exception as e:
         yield f"Error: {str(e)}"
 
+def create_web_search_ui():
+    """Create UI components for web search configuration"""
+    st.subheader("🔍 Web Search")
+    
+    # Initialize web search session state
+    if "web_search_enabled" not in st.session_state:
+        st.session_state.web_search_enabled = False
+    if "web_search_max_uses" not in st.session_state:
+        st.session_state.web_search_max_uses = 3
+    if "web_search_allowed_domains" not in st.session_state:
+        st.session_state.web_search_allowed_domains = ""
+    if "web_search_blocked_domains" not in st.session_state:
+        st.session_state.web_search_blocked_domains = ""
+    if "web_search_location" not in st.session_state:
+        st.session_state.web_search_location = ""
+    
+    # Web search toggle
+    web_search_enabled = st.checkbox(
+        "Enable Web Search",
+        value=st.session_state.web_search_enabled,
+        help="Allow Claude to search the web for up-to-date information"
+    )
+    st.session_state.web_search_enabled = web_search_enabled
+    
+    if web_search_enabled:
+        # Max uses
+        max_uses = st.slider(
+            "Max searches per conversation",
+            min_value=1,
+            max_value=10,
+            value=st.session_state.web_search_max_uses,
+            help="Maximum number of web searches Claude can perform in this conversation"
+        )
+        st.session_state.web_search_max_uses = max_uses
+        
+        # Location (optional)
+        location = st.text_input(
+            "Search location (optional)",
+            value=st.session_state.web_search_location,
+            placeholder="e.g., New York, US or London, UK",
+            help="Specify a location to get geographically relevant results"
+        )
+        st.session_state.web_search_location = location.strip()
+        
+        # Advanced options
+        with st.expander("🔧 Advanced Options"):
+            # Allowed domains
+            allowed_domains = st.text_area(
+                "Allowed domains (optional)",
+                value=st.session_state.web_search_allowed_domains,
+                placeholder="example.com, news.ycombinator.com\n(one per line or comma-separated)",
+                help="If specified, Claude can only search these domains",
+                height=60
+            )
+            st.session_state.web_search_allowed_domains = allowed_domains.strip()
+            
+            # Blocked domains
+            blocked_domains = st.text_area(
+                "Blocked domains (optional)",
+                value=st.session_state.web_search_blocked_domains,
+                placeholder="spam.com, ads.example.com\n(one per line or comma-separated)",
+                help="Claude will avoid searching these domains",
+                height=60
+            )
+            st.session_state.web_search_blocked_domains = blocked_domains.strip()
+        
+        # Show current config summary
+        st.caption(f"🔍 {max_uses} searches max" + (f" • 📍 {location}" if location else ""))
+    
+    return web_search_enabled
+
+def get_web_search_tools() -> Optional[List[Dict[str, Any]]]:
+    """Create web search tools configuration if enabled"""
+    if not st.session_state.get("web_search_enabled", False):
+        return None
+    
+    # Check if we've had recent overloaded errors
+    if st.session_state.get("web_search_disabled", False):
+        # Show warning and don't enable web search
+        st.warning("🔍 Web search temporarily disabled due to API overload. Please try again in a few minutes.")
+        return None
+    
+    # Get the Claude client to create web search tool
+    try:
+        client = get_ai_client("claude-sonnet-4-20250514")  # Use any Claude model for tool creation
+        if not hasattr(client, 'create_web_search_tool'):
+            return None
+            
+        # Parse domains
+        allowed_domains = None
+        if st.session_state.get("web_search_allowed_domains"):
+            domains_text = st.session_state["web_search_allowed_domains"]
+            # Split by newlines or commas and clean up
+            allowed_domains = [d.strip() for d in domains_text.replace(',', '\n').split('\n') if d.strip()]
+        
+        blocked_domains = None
+        if st.session_state.get("web_search_blocked_domains"):
+            domains_text = st.session_state["web_search_blocked_domains"]
+            # Split by newlines or commas and clean up
+            blocked_domains = [d.strip() for d in domains_text.replace(',', '\n').split('\n') if d.strip()]
+        
+        # Create web search tool
+        web_search_tool = client.create_web_search_tool(
+            max_uses=st.session_state.get("web_search_max_uses", 3),
+            allowed_domains=allowed_domains,
+            blocked_domains=blocked_domains,
+            user_location=st.session_state.get("web_search_location") or None
+        )
+        
+        return [web_search_tool]
+        
+    except Exception as e:
+        st.error(f"Error creating web search tool: {e}")
+        return None
+
 def main():
     st.title("💬 Simple Chat")
-    st.caption("🟢 OpenAI GPT • 🟣 Anthropic Claude • Auto-save conversations")
+    st.caption("🟢 OpenAI GPT • 🟣 Anthropic Claude • 🔍 Web Search • Auto-save conversations")
     
     # Initialize session state
     if "messages" not in st.session_state:
@@ -44,6 +159,8 @@ def main():
         st.session_state.thinking_enabled = False
     if "thinking_budget" not in st.session_state:
         st.session_state.thinking_budget = 4000
+    if "web_search_disabled" not in st.session_state:
+        st.session_state.web_search_disabled = False
     
     # Initialize file-related session state
     file_manager.init_session_state()
@@ -124,6 +241,20 @@ def main():
                 ["gpt-4o", "gpt-4", "gpt-3.5-turbo"],
                 index=0
             )
+        
+        # Web Search (only for Claude models)
+        claude_models = ["claude-sonnet-4-20250514", "claude-opus-4-20250514", "claude-3-5-sonnet-20241022"]
+        if model in claude_models:
+            st.divider()
+            
+            # Show re-enable button if web search was disabled
+            if st.session_state.get("web_search_disabled", False):
+                if st.button("🔄 Re-enable Web Search", type="secondary", use_container_width=True):
+                    st.session_state.web_search_disabled = False
+                    st.rerun()
+                st.caption("Web search was disabled due to API overload. Click above to re-enable.")
+            
+            create_web_search_ui()
         
         # Extended Thinking Controls (only for Claude 4 models)
         claude_thinking_models = ["claude-sonnet-4-20250514", "claude-opus-4-20250514"]
@@ -262,6 +393,9 @@ def main():
                 file_count = len(message_content) - 1
                 st.caption(f"📎 {file_count} file{'s' if file_count != 1 else ''} attached")
         
+        # Get tools (web search if enabled)
+        tools = get_web_search_tools()
+        
         # Generate and display assistant response
         with st.chat_message("assistant"):
             response_placeholder = st.empty()
@@ -274,7 +408,8 @@ def main():
                 st.session_state.messages, 
                 model,
                 thinking_enabled=st.session_state.thinking_enabled,
-                thinking_budget=st.session_state.thinking_budget
+                thinking_budget=st.session_state.thinking_budget,
+                tools=tools
             ):
                 full_response += chunk
                 update_buffer += chunk
@@ -287,6 +422,12 @@ def main():
             
             # Remove cursor and show final response
             response_placeholder.markdown(full_response)
+            
+            # Check for overloaded errors and disable web search if needed
+            if "❌ **API Overloaded**" in full_response or "overloaded" in full_response.lower():
+                if tools and any(tool.get("type") == "web_search_20250305" for tool in tools):
+                    st.session_state.web_search_disabled = True
+                    st.warning("🔍 Web search has been temporarily disabled due to API overload. You can re-enable it in the sidebar when the service is available again.")
         
         # Add assistant response to chat history
         st.session_state.messages.append({"role": "assistant", "content": full_response})

@@ -64,7 +64,7 @@ Examples:
     
     elif option == 'quick':
         print("Running working tests (no coverage)...")
-        return run_command([sys.executable, '-m', 'pytest', 'tests/test_simple.py', 'tests/test_fixed.py', 'tests/test_file_upload.py', '--no-cov', '-q'])
+        return run_command([sys.executable, '-m', 'pytest', 'tests/test_simple.py', 'tests/test_fixed.py', 'tests/test_file_upload.py', 'tests/test_web_search.py', 'tests/test_error_handling.py', '--no-cov', '-q'])
     
     elif option == 'unit':
         print("Running unit tests...")
@@ -76,7 +76,7 @@ Examples:
     
     elif option == 'coverage':
         print("Running working tests with coverage report...")
-        exit_code = run_command([sys.executable, '-m', 'pytest', 'tests/test_simple.py', 'tests/test_fixed.py', 'tests/test_file_upload.py'])
+        exit_code = run_command([sys.executable, '-m', 'pytest', 'tests/test_simple.py', 'tests/test_fixed.py', 'tests/test_file_upload.py', 'tests/test_web_search.py', 'tests/test_error_handling.py'])
         if exit_code == 0 and os.path.exists('htmlcov/index.html'):
             print("Opening coverage report...")
             import webbrowser
@@ -89,7 +89,7 @@ Examples:
     
     elif option == 'default':
         print("Running working tests with coverage...")
-        return run_command([sys.executable, '-m', 'pytest', 'tests/test_simple.py', 'tests/test_fixed.py', 'tests/test_file_upload.py'])
+        return run_command([sys.executable, '-m', 'pytest', 'tests/test_simple.py', 'tests/test_fixed.py', 'tests/test_file_upload.py', 'tests/test_web_search.py', 'tests/test_error_handling.py'])
     
     else:
         print(f"Unknown option: {option}")

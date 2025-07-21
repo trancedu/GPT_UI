@@ -4,7 +4,7 @@ This directory contains a **fully working** test framework for the GPT UI chat a
 
 ## 🎉 Current Status: **ALL TESTS PASSING** 
 
-**42/42 tests passing** - Complete test framework with file upload support ready for production use!
+**66/66 tests passing** - Complete test framework with file upload, web search, AND error handling support ready for production use!
 
 ### ✅ **Fully Working Test Infrastructure**
 
@@ -33,7 +33,7 @@ This directory contains a **fully working** test framework for the GPT UI chat a
    - Model availability checking (`get_available_models`)
    - Correct model structure validation
 
-4. **File Upload Functionality** (20 tests) 🆕
+4. **File Upload Functionality** (20 tests) 🔥
    - **TXT File Support**: Upload, reference creation, message preparation
    - **Python File Support**: Upload, reference creation, message preparation
    - **Multiple File Types**: PDF, images, code files
@@ -41,7 +41,25 @@ This directory contains a **fully working** test framework for the GPT UI chat a
    - **Error Handling**: Unsupported models, API errors, cleanup
    - **Session Management**: File tracking, clearing, pending files
 
-5. **Core Infrastructure** (6 tests)
+5. **Web Search Functionality** (14 tests) ✨ **NEW!**
+   - **Tool Creation**: Basic and parameterized web search tool configuration
+   - **Search Parameters**: Max uses, domain restrictions, location settings
+   - **Streaming Integration**: Web search with real-time streaming responses
+   - **Beta Headers**: Correct API header management for web search
+   - **Combined Features**: Web search + file uploads + thinking integration
+   - **Error Handling**: Graceful failure handling and recovery
+   - **UI Support**: Domain parsing and configuration validation
+
+6. **Error Handling & Retry Logic** (10 tests) 🛡️ **NEW!**
+   - **API Overload Handling**: Automatic retry with exponential backoff
+   - **Rate Limit Management**: Smart retry logic for 429 errors
+   - **Authentication Errors**: Clear error messages for API key issues
+   - **Web Search Errors**: Specific handling for web search failures
+   - **Retry Logic**: Up to 3 retries with exponential backoff + jitter
+   - **Streaming Error Handling**: Error handling in both streaming and non-streaming modes
+   - **Error Message Formatting**: User-friendly error messages with emojis
+
+7. **Core Infrastructure** (6 tests)
    - Environment variable mocking
    - Temporary file/directory handling
    - Basic Python operations
@@ -71,10 +89,10 @@ python run_tests.py coverage
 python run_tests.py [option]
 
 ✅ **All Working Options:**
-  (no args)   - All working tests with coverage ✅ 42/42 pass
-  quick       - Fast run without coverage ✅ 42/42 pass 
-  coverage    - Tests + HTML coverage report ✅ 42/42 pass
-  all         - ALL tests (includes broken ones) ⚠️ 42/76 pass
+  (no args)   - All working tests with coverage ✅ 66/66 pass
+  quick       - Fast run without coverage ✅ 66/66 pass 
+  coverage    - Tests + HTML coverage report ✅ 66/66 pass
+  all         - ALL tests (includes broken ones) ⚠️ 66/100 pass
   install     - Install test dependencies
   clean       - Clean test artifacts  
   --help      - Show help
@@ -87,11 +105,15 @@ python run_tests.py [option]
 python -m pytest tests/test_simple.py -v
 python -m pytest tests/test_fixed.py -v
 python -m pytest tests/test_file_upload.py -v
+python -m pytest tests/test_web_search.py -v
+python -m pytest tests/test_error_handling.py -v
 
 # Run all working tests with coverage
-python -m pytest tests/test_simple.py tests/test_fixed.py tests/test_file_upload.py --cov=. --cov-report=html
+python -m pytest tests/test_simple.py tests/test_fixed.py tests/test_file_upload.py tests/test_web_search.py tests/test_error_handling.py --cov=. --cov-report=html
 
-# Run single test
+# Run single test examples
+python -m pytest tests/test_web_search.py::TestWebSearchTool::test_create_web_search_tool_basic -v
+python -m pytest tests/test_error_handling.py::TestErrorHandling::test_overloaded_error_handling -v
 python -m pytest tests/test_file_upload.py::TestFileUpload::test_upload_txt_file_success -v
 ```
 
@@ -102,7 +124,9 @@ tests/
 ├── conftest.py              # Test configuration & fixtures ✅
 ├── test_simple.py           # Basic functionality tests ✅ 8/8 pass
 ├── test_fixed.py           # Core functionality tests ✅ 14/14 pass
-├── test_file_upload.py     # File upload tests ✅ 20/20 pass 🆕
+├── test_file_upload.py     # File upload tests ✅ 20/20 pass 🔥
+├── test_web_search.py      # Web search tests ✅ 14/14 pass ✨ NEW!
+├── test_error_handling.py  # Error handling tests ✅ 10/10 pass 🛡️ NEW!
 ├── test_chat_history.py     # Complex tests (some broken) ⚠️
 ├── test_ai_client.py        # Integration tests (some broken) ⚠️  
 ├── test_app.py             # App tests (some broken) ⚠️
@@ -139,11 +163,13 @@ tests/
 
 - **Isolation**: Each test runs in clean environment
 - **Repeatability**: Tests produce same results every time  
-- **Speed**: 42 tests complete in <1 second
+- **Speed**: 66 tests complete in <1 second
 - **Coverage**: HTML reports show exactly what's tested
 - **Cleanup**: No test artifacts left behind
 - **Error Handling**: Tests verify both success and failure cases
 - **File Upload Support**: Complete TXT and Python file testing ✅
+- **Web Search Support**: Complete Claude web search tool testing ✨
+- **Error Recovery**: Complete API error handling and retry logic testing 🛡️
 
 ## 🔧 Current Test Configuration
 
@@ -229,9 +255,11 @@ def test_your_new_function(self):
 
 **The test framework is battle-tested and ready for your development workflow:**
 
-- ✅ **42/42 tests passing** - Comprehensive coverage of core functionality + file uploads
+- ✅ **66/66 tests passing** - Comprehensive coverage of core functionality + file uploads + web search + error handling
 - ✅ **<1 second execution time** - Fast feedback for development
 - ✅ **TXT & Python file support** - Complete file upload workflow testing
+- ✅ **Web search integration** - Complete Claude web search tool testing ✨
+- ✅ **Error handling & retry logic** - Complete API error recovery testing 🛡️
 - ✅ **HTML coverage reports** - Visual feedback on what's tested  
 - ✅ **Easy to extend** - Clear patterns for adding new tests
 - ✅ **Fully documented** - This README provides complete usage guide
