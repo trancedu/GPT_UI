@@ -2,9 +2,9 @@
 
 This directory contains a **fully working** test framework for the GPT UI chat application, covering all basic functionalities (excluding file upload features as requested).
 
-## 🎉 Current Status: **ALL TESTS PASSING**
+## 🎉 Current Status: **ALL TESTS PASSING** 
 
-**22/22 tests passing** - Complete test framework ready for production use!
+**42/42 tests passing** - Complete test framework with file upload support ready for production use!
 
 ### ✅ **Fully Working Test Infrastructure**
 
@@ -33,7 +33,15 @@ This directory contains a **fully working** test framework for the GPT UI chat a
    - Model availability checking (`get_available_models`)
    - Correct model structure validation
 
-4. **Core Infrastructure** (6 tests)
+4. **File Upload Functionality** (20 tests) 🆕
+   - **TXT File Support**: Upload, reference creation, message preparation
+   - **Python File Support**: Upload, reference creation, message preparation
+   - **Multiple File Types**: PDF, images, code files
+   - **Complete Upload Workflow**: Upload → attach → message preparation
+   - **Error Handling**: Unsupported models, API errors, cleanup
+   - **Session Management**: File tracking, clearing, pending files
+
+5. **Core Infrastructure** (6 tests)
    - Environment variable mocking
    - Temporary file/directory handling
    - Basic Python operations
@@ -63,10 +71,10 @@ python run_tests.py coverage
 python run_tests.py [option]
 
 ✅ **All Working Options:**
-  (no args)   - All working tests with coverage ✅ 22/22 pass
-  quick       - Fast run without coverage ✅ 22/22 pass 
-  coverage    - Tests + HTML coverage report ✅ 22/22 pass
-  all         - ALL tests (includes broken ones) ⚠️ 22/56 pass
+  (no args)   - All working tests with coverage ✅ 42/42 pass
+  quick       - Fast run without coverage ✅ 42/42 pass 
+  coverage    - Tests + HTML coverage report ✅ 42/42 pass
+  all         - ALL tests (includes broken ones) ⚠️ 42/76 pass
   install     - Install test dependencies
   clean       - Clean test artifacts  
   --help      - Show help
@@ -78,12 +86,13 @@ python run_tests.py [option]
 # Run specific test files
 python -m pytest tests/test_simple.py -v
 python -m pytest tests/test_fixed.py -v
+python -m pytest tests/test_file_upload.py -v
 
 # Run all working tests with coverage
-python -m pytest tests/test_simple.py tests/test_fixed.py --cov=. --cov-report=html
+python -m pytest tests/test_simple.py tests/test_fixed.py tests/test_file_upload.py --cov=. --cov-report=html
 
 # Run single test
-python -m pytest tests/test_fixed.py::TestActualBehavior::test_file_size_formatting_comprehensive -v
+python -m pytest tests/test_file_upload.py::TestFileUpload::test_upload_txt_file_success -v
 ```
 
 ## 📁 **Test Structure**
@@ -93,6 +102,7 @@ tests/
 ├── conftest.py              # Test configuration & fixtures ✅
 ├── test_simple.py           # Basic functionality tests ✅ 8/8 pass
 ├── test_fixed.py           # Core functionality tests ✅ 14/14 pass
+├── test_file_upload.py     # File upload tests ✅ 20/20 pass 🆕
 ├── test_chat_history.py     # Complex tests (some broken) ⚠️
 ├── test_ai_client.py        # Integration tests (some broken) ⚠️  
 ├── test_app.py             # App tests (some broken) ⚠️
@@ -129,10 +139,11 @@ tests/
 
 - **Isolation**: Each test runs in clean environment
 - **Repeatability**: Tests produce same results every time  
-- **Speed**: 22 tests complete in <1 second
+- **Speed**: 42 tests complete in <1 second
 - **Coverage**: HTML reports show exactly what's tested
 - **Cleanup**: No test artifacts left behind
 - **Error Handling**: Tests verify both success and failure cases
+- **File Upload Support**: Complete TXT and Python file testing ✅
 
 ## 🔧 Current Test Configuration
 
@@ -218,8 +229,9 @@ def test_your_new_function(self):
 
 **The test framework is battle-tested and ready for your development workflow:**
 
-- ✅ **22/22 tests passing** - Comprehensive coverage of core functionality
+- ✅ **42/42 tests passing** - Comprehensive coverage of core functionality + file uploads
 - ✅ **<1 second execution time** - Fast feedback for development
+- ✅ **TXT & Python file support** - Complete file upload workflow testing
 - ✅ **HTML coverage reports** - Visual feedback on what's tested  
 - ✅ **Easy to extend** - Clear patterns for adding new tests
 - ✅ **Fully documented** - This README provides complete usage guide
